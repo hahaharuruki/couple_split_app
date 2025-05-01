@@ -118,15 +118,6 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  Future<void> _saveSettings(String myName, String partnerName) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('myName', myName);
-    await prefs.setString('partnerName', partnerName);
-    setState(() {
-      _myName = myName;
-      _partnerName = partnerName;
-    });
-  }
 
   Future<void> _loadPayments() async {
     final prefs = await SharedPreferences.getInstance();
@@ -166,16 +157,6 @@ class _HomePageState extends State<HomePage> {
     _savePayments();
   }
 
-  void _removeSelectedPayments() {
-    setState(() {
-      final selected = _selectedIndexes.toList()..sort((a, b) => b.compareTo(a));
-      for (var i in selected) {
-        payments.removeAt(i);
-      }
-      _selectedIndexes.clear();
-    });
-    _savePayments();
-  }
 
   double get totalAmount => payments
       .where((p) => p.date.year.toString().padLeft(4, '0') + '-' + p.date.month.toString().padLeft(2, '0') == _selectedMonth)
@@ -202,233 +183,227 @@ class _HomePageState extends State<HomePage> {
     final partnerShareTotal = monthly.fold(0.0, (sum, p) => sum + p.partnerShare);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('カップル割り勘アプリ'),
-        actions: [
-          if (!_isEditingMode)
-            IconButton(icon: const Icon(Icons.edit), tooltip: '編集', onPressed: () => setState(() => _isEditingMode = true)),
-          if (_isEditingMode) ...[
-            IconButton(
-              icon: const Icon(Icons.select_all),
-              tooltip: '全選択',
-              onPressed: () => setState(() {
-                if (_selectedIndexes.length == payments.length) {
-                  _selectedIndexes.clear();
-                } else {
-                  _selectedIndexes = Set<int>.from(List.generate(payments.length, (i) => i));
-                }
-              }),
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete),
-              tooltip: '選択削除',
-              onPressed: _selectedIndexes.isEmpty
-                  ? null
-                  : () => showDialog(
-                        context: context,
-                        builder: (_) => AlertDialog(
-                          title: const Text('確認'),
-                          content: const Text('選択した履歴を削除しますか？'),
-                          actions: [
-                            TextButton(onPressed: () => Navigator.pop(context), child: const Text('キャンセル')),
-                            TextButton(
-                                onPressed: () {
-                                  Navigator.pop(context);
-                                  _removeSelectedPayments();
-                                },
-                                child: const Text('削除')),
-                          ],
-                        ),
-                      ),
-            ),
-            IconButton(icon: const Icon(Icons.edit), tooltip: '編集終了', onPressed: () => setState(() {
-                  _isEditingMode = false;
-                  _selectedIndexes.clear();
-                })),
-          ],
-          IconButton(
-            icon: const Icon(Icons.settings),
-            tooltip: '設定',
-            onPressed: () async {
-              final result = await Navigator.push<Map<String, String>>(
-                context,
-                MaterialPageRoute(builder: (_) => SettingsPage(myName: _myName, partnerName: _partnerName)),
-              );
-              if (result != null) {
-                _saveSettings(result['myName'] ?? _myName, result['partnerName'] ?? _partnerName);
-              }
-            },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Text("${_selectedMonth.split('-')[0]}年", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          ),
-          SizedBox(
-            height: 50,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              children: _generatePastMonths().map((m) {
-                final monthNum = int.parse(m.split('-')[1]);
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: ChoiceChip(
-                    label: Text("$monthNum月"),
-                    selected: m == _selectedMonth,
-                    onSelected: (_) => setState(() => _selectedMonth = m),
+      appBar: null,
+      body: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    "${_selectedMonth.split('-')[0]}年",
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
-                );
-              }).toList(),
-            ),
-          ),
-          Text('合計支出：${totalAmount.round()} 円', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
-          Text('$_myName：${myShareTotal.round()}円　$_partnerName：${partnerShareTotal.round()}円',
-              style: const TextStyle(fontSize: 14, color: Colors.grey)),
-          Text(settlementMessage, style: const TextStyle(fontSize: 16)),
-          const Divider(),
-          Expanded(
-            child: ListView.builder(
-              itemCount: monthly.length + 1,
-              itemBuilder: (context, idx) {
-                if (idx < monthly.length) {
-                  final entry = monthly.elementAt(idx);
-                  final index = payments.indexOf(entry);
-                  final p = entry;
-                  final payerDisplay = p.payer == '自分' ? _myName : p.payer == '相手' ? _partnerName : p.payer;
-                  final isThisYear = p.date.year == DateTime.now().year;
-                  final formattedDate = isThisYear
-                      ? "${p.date.month}月${p.date.day}日"
-                      : "${p.date.year}年${p.date.month}月${p.date.day}日";
-                  final myShare = p.myShare.round();
-                  final settlement = p.getMySettlement().round();
-                  return ListTile(
-                    leading: _isEditingMode
-                        ? Checkbox(
-                            value: _selectedIndexes.contains(index),
-                            onChanged: (v) => setState(() {
-                              if (v == true) {
-                                _selectedIndexes.add(index);
-                              } else {
-                                _selectedIndexes.remove(index);
-                              }
-                            }),
-                          )
-                        : null,
-                    title: Text('${p.item} - ${p.amount}円'),
-                    subtitle: Text('$formattedDate｜支払者: $payerDisplay｜自分の負担: ${myShare}円｜差額: ${settlement}円'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () async {
-                      final result = await Navigator.push<PaymentAction>(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => AddPaymentPage(initial: p, myName: _myName, partnerName: _partnerName),
-                        ),
-                      );
-                      if (result != null) {
-                        setState(() {
-                          if (result.delete) {
-                            _removePayment(index);
-                          } else if (result.updated != null) {
-                            _updatePayment(index, result.updated!);
-                          }
-                        });
-                      }
+                  IconButton(
+                    icon: Icon(_isEditingMode ? Icons.check : Icons.edit),
+                    tooltip: _isEditingMode ? '編集終了' : '編集',
+                    onPressed: () {
+                      setState(() {
+                        _isEditingMode = !_isEditingMode;
+                        if (!_isEditingMode) _selectedIndexes.clear();
+                      });
                     },
-                  );
-                }
-                // Custom: 精算済みにする or 未精算に戻すボタン
-                else if (!_settledMonths.contains(_selectedMonth)) {
-                  return Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: ElevatedButton(
-                      onPressed: () {
-                        showDialog(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('精算確認'),
-                            content: const Text('この月を「精算済み」にしますか？\n後から「未精算」に戻すこともできます。'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.of(context).pop(),
-                                child: const Text('キャンセル'),
-                              ),
-                              TextButton(
-                                onPressed: () {
-                                  Navigator.of(context).pop();
-                                  setState(() {
-                                    _settledMonths.add(_selectedMonth);
-                                  });
-                                  _savePayments();
-                                },
-                                child: const Text('精算する'),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                      child: const Text('この月を精算済みにする'),
-                    ),
-                  );
-                }
-                else if (_settledMonths.contains(_selectedMonth)) {
-                  return Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.grey),
-                      onPressed: () {
-                        showDialog(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('未精算に戻す確認'),
-                            content: const Text('この月の「精算済み」状態を取り消して、未精算に戻しますか？'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.of(context).pop(),
-                                child: const Text('キャンセル'),
-                              ),
-                              TextButton(
-                                onPressed: () {
-                                  Navigator.of(context).pop();
-                                  setState(() {
-                                    _settledMonths.remove(_selectedMonth);
-                                  });
-                                  _savePayments();
-                                },
-                                child: const Text('未精算に戻す'),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                      child: const Text('未精算に戻す'),
-                    ),
-                  );
-                }
-                else {
-                  return const SizedBox.shrink();
-                }
-              },
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+            SizedBox(
+              height: 50,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: _generatePastMonths().map((m) {
+                  final monthNum = int.parse(m.split('-')[1]);
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: ChoiceChip(
+                      label: Text("$monthNum月"),
+                      selected: m == _selectedMonth,
+                      onSelected: (_) => setState(() => _selectedMonth = m),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            Text('合計支出：${totalAmount.round()} 円', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
+            Text('$_myName：${myShareTotal.round()}円　$_partnerName：${partnerShareTotal.round()}円',
+                style: const TextStyle(fontSize: 14, color: Colors.grey)),
+            Text(settlementMessage, style: const TextStyle(fontSize: 16)),
+            const Divider(),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.only(bottom: 80),
+                itemCount: monthly.length + 1,
+                itemBuilder: (context, idx) {
+                  if (idx < monthly.length) {
+                    final entry = monthly.elementAt(idx);
+                    final index = payments.indexOf(entry);
+                    final p = entry;
+                    final payerDisplay = p.payer == '自分' ? _myName : p.payer == '相手' ? _partnerName : p.payer;
+                    final isThisYear = p.date.year == DateTime.now().year;
+                    final formattedDate = isThisYear
+                        ? "${p.date.month}月${p.date.day}日"
+                        : "${p.date.year}年${p.date.month}月${p.date.day}日";
+                    final myShare = p.myShare.round();
+                    final settlement = p.getMySettlement().round();
+                    return ListTile(
+                      leading: _isEditingMode
+                          ? Checkbox(
+                              value: _selectedIndexes.contains(index),
+                              onChanged: (v) => setState(() {
+                                if (v == true) {
+                                  _selectedIndexes.add(index);
+                                } else {
+                                  _selectedIndexes.remove(index);
+                                }
+                              }),
+                            )
+                          : null,
+                      title: Text('${p.item} - ${p.amount}円'),
+                      subtitle: Text('$formattedDate｜支払者: $payerDisplay｜自分の負担: ${myShare}円｜差額: ${settlement}円'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () async {
+                        final result = await Navigator.push<PaymentAction>(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => AddPaymentPage(initial: p, myName: _myName, partnerName: _partnerName),
+                          ),
+                        );
+                        if (result != null) {
+                          setState(() {
+                            if (result.delete) {
+                              _removePayment(index);
+                            } else if (result.updated != null) {
+                              _updatePayment(index, result.updated!);
+                            }
+                          });
+                        }
+                      },
+                    );
+                  }
+                  // Custom: 精算済みにする or 未精算に戻すボタン
+                  else if (!_settledMonths.contains(_selectedMonth)) {
+                    return Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: ElevatedButton(
+                        onPressed: () {
+                          showDialog(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('精算確認'),
+                              content: const Text('この月を「精算済み」にしますか？\n後から「未精算」に戻すこともできます。'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(context).pop(),
+                                  child: const Text('キャンセル'),
+                                ),
+                                TextButton(
+                                  onPressed: () {
+                                    Navigator.of(context).pop();
+                                    setState(() {
+                                      _settledMonths.add(_selectedMonth);
+                                    });
+                                    _savePayments();
+                                  },
+                                  child: const Text('精算する'),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                        child: const Text('この月を精算済みにする'),
+                      ),
+                    );
+                  }
+                  else if (_settledMonths.contains(_selectedMonth)) {
+                    return Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.grey),
+                        onPressed: () {
+                          showDialog(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('未精算に戻す確認'),
+                              content: const Text('この月の「精算済み」状態を取り消して、未精算に戻しますか？'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(context).pop(),
+                                  child: const Text('キャンセル'),
+                                ),
+                                TextButton(
+                                  onPressed: () {
+                                    Navigator.of(context).pop();
+                                    setState(() {
+                                      _settledMonths.remove(_selectedMonth);
+                                    });
+                                    _savePayments();
+                                  },
+                                  child: const Text('未精算に戻す'),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                        child: const Text('未精算に戻す'),
+                      ),
+                    );
+                  }
+                  else {
+                    return const SizedBox.shrink();
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
       ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.all(12),
-        child: ElevatedButton(
-          child: const Text('支払いを追加'),
-          onPressed: () async {
-            final result = await Navigator.push<PaymentAction>(
-              context,
-              MaterialPageRoute(builder: (_) => AddPaymentPage(myName: _myName, partnerName: _partnerName)),
-            );
-            if (result != null && !result.delete && result.updated != null) {
-              final payment = result.updated!..date = DateTime.now();
-              _addPayment(payment);
-            }
-          },
+      floatingActionButton: FloatingActionButton(
+        onPressed: () async {
+          final result = await Navigator.push<PaymentAction>(
+            context,
+            MaterialPageRoute(
+              builder: (_) => AddPaymentPage(myName: _myName, partnerName: _partnerName),
+            ),
+          );
+          if (result != null && !result.delete && result.updated != null) {
+            final payment = result.updated!..date = DateTime.now();
+            _addPayment(payment);
+          }
+        },
+        child: const Icon(Icons.add),
+        tooltip: '支払いを追加',
+        backgroundColor: Colors.pink,
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      bottomNavigationBar: BottomAppBar(
+        shape: const CircularNotchedRectangle(),
+        notchMargin: 6.0,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: IconButton(
+                icon: const Icon(Icons.home),
+                onPressed: () {}, // no action for home
+              ),
+            ),
+            const SizedBox(width: 48), // space for FAB in center
+            Expanded(
+              child: IconButton(
+                icon: const Icon(Icons.settings),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => SettingsPage(myName: _myName, partnerName: _partnerName),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
         ),
       ),
     );
