@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "77103938701",
+    "project_id": "couple-split-app-6d55a",
+    "storage_bucket": "couple-split-app-6d55a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:77103938701:android:3b8f3a7f5d22ee082336c4",
+        "android_client_info": {
+          "package_name": "com.example.couple_split_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDOpKi8pt0xdNpbprQKOMLfvQuDdzYQ-5I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
