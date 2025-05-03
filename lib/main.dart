@@ -15,16 +15,18 @@ class Tag {
   Tag({required this.name, required this.ratio, required this.color});
 
   Map<String, dynamic> toMap() => {
-    'name': name,
-    'ratio': ratio,
-    'color': color.value,
-  };
+        'name': name,
+        'ratio': ratio,
+        'color': color.value,
+      };
 
   factory Tag.fromMap(Map<String, dynamic> map) => Tag(
-    name: map['name'],
-    ratio: map['ratio'],
-    color: Color(map['color']),
-  );
+        name: map['name'],
+        ratio: map['ratio'] is int
+            ? (map['ratio'] as int).toDouble()
+            : map['ratio'],
+        color: Color(map['color']),
+      );
 }
 
 void main() async {
@@ -56,7 +58,7 @@ class CoupleSplitApp extends StatelessWidget {
 class Payment {
   final String item;
   final int amount;
-  final String payer;
+  final int payer;
   final double myRatio;
   final String category;
   DateTime date;
@@ -74,7 +76,7 @@ class Payment {
   double get partnerShare => amount * (1 - myRatio);
   double getMySettlement() {
     // Positive: you should receive money; Negative: you owe money
-    if (payer == '自分') {
+    if (payer == 1) {
       // You paid the full amount, so partner owes you: amount minus your share
       return amount - myShare;
     } else {
@@ -98,7 +100,7 @@ class Payment {
     return Payment(
       item: map['item'],
       amount: map['amount'],
-      payer: map['payer'],
+      payer: map['payer'] is String ? int.parse(map['payer']) : map['payer'],
       myRatio: map['myRatio'],
       category: map['category'] ?? '食費',
       date: map.containsKey('date') ? DateTime.parse(map['date']) : DateTime.now(),
@@ -120,8 +122,8 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   List<Payment> payments = [];
-  String _myName = '自分';
-  String _partnerName = '相手';
+  String _member1Name = 'メンバー1';
+  String _member2Name = 'メンバー2';
   Set<int> _selectedIndexes = {};
   bool _isEditingMode = false;
   String _selectedMonth = "${DateTime.now().year.toString().padLeft(4, '0')}-${DateTime.now().month.toString().padLeft(2, '0')}";
@@ -155,12 +157,22 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _loadSettings() async {
     final snapshot = await FirebaseFirestore.instance.collection('settings').doc('names').get();
+    String member1Name = '';
+    String member2Name = '';
     if (snapshot.exists) {
       final data = snapshot.data()!;
-      setState(() {
-        _myName = data['myName'] ?? '自分';
-        _partnerName = data['partnerName'] ?? '相手';
-      });
+      member1Name = data['member1Name'] ?? '';
+      member2Name = data['member2Name'] ?? '';
+    }
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _member1Name = member1Name.isNotEmpty ? member1Name : (prefs.getString('member1Name') ?? 'メンバー1');
+      _member2Name = member2Name.isNotEmpty ? member2Name : (prefs.getString('member2Name') ?? 'メンバー2');
+    });
+    // Firestore取得できた場合はSharedPreferencesにも保存
+    if (member1Name.isNotEmpty && member2Name.isNotEmpty) {
+      await prefs.setString('member1Name', member1Name);
+      await prefs.setString('member2Name', member2Name);
     }
   }
 
@@ -238,8 +250,8 @@ class _HomePageState extends State<HomePage> {
         : roundedSettlement == 0
             ? '精算は不要です'
             : roundedSettlement < 0
-                ? '精算時：$_myName から $_partnerName に ${-roundedSettlement}円払う'
-                : '精算時：$_partnerName から $_myName に ${roundedSettlement}円払う';
+                ? '精算時：$_member1Name から $_member2Name に ${-roundedSettlement}円払う'
+                : '精算時：$_member2Name から $_member1Name に ${roundedSettlement}円払う';
 
     final monthly = payments.where((p) => p.date.year.toString().padLeft(4, '0') + '-' + p.date.month.toString().padLeft(2, '0') == _selectedMonth);
     final myShareTotal = monthly.fold(0.0, (sum, p) => sum + p.myShare);
@@ -370,7 +382,7 @@ class _HomePageState extends State<HomePage> {
                     .toList(),
               ),
             Text(
-              '$_myName: ${myShareTotal.round()} 円　$_partnerName: ${partnerShareTotal.round()} 円',
+              '$_member1Name: ${myShareTotal.round()} 円　$_member2Name: ${partnerShareTotal.round()} 円',
               style: const TextStyle(fontSize: 14, color: Colors.grey),
             ),
             Text(settlementMessage, style: const TextStyle(fontSize: 16)),
@@ -384,7 +396,11 @@ class _HomePageState extends State<HomePage> {
                     final entry = monthly.elementAt(idx);
                     final index = payments.indexOf(entry);
                     final p = entry;
-                    final payerDisplay = p.payer == '自分' ? _myName : p.payer == '相手' ? _partnerName : p.payer;
+                final payerDisplay = switch (p.payer) {
+                  1 => _member1Name,
+                  2 => _member2Name,
+                  _ => '不明',
+                };
                     final isThisYear = p.date.year == DateTime.now().year;
                     final weekday = ['月', '火', '水', '木', '金', '土', '日'][p.date.weekday - 1];
                     final formattedDate = isThisYear
@@ -420,7 +436,7 @@ class _HomePageState extends State<HomePage> {
                         final result = await Navigator.push<PaymentAction>(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => AddPaymentPage(initial: p, myName: _myName, partnerName: _partnerName),
+                            builder: (_) => AddPaymentPage(initial: p, myName: _member1Name, partnerName: _member2Name),
                           ),
                         );
                         if (result != null) {
@@ -517,7 +533,7 @@ class _HomePageState extends State<HomePage> {
           final result = await Navigator.push<PaymentAction>(
             context,
             MaterialPageRoute(
-              builder: (_) => AddPaymentPage(myName: _myName, partnerName: _partnerName),
+              builder: (_) => AddPaymentPage(myName: _member1Name, partnerName: _member2Name),
             ),
           );
           if (result != null && !result.delete && result.updated != null) {
@@ -557,16 +573,18 @@ class _HomePageState extends State<HomePage> {
                     icon: const Icon(Icons.settings),
                     padding: EdgeInsets.zero,
                     iconSize: 28,
-                    onPressed: () {
-                      Navigator.push(
+                    onPressed: () async {
+                      final result = await Navigator.push(
                         context,
                         MaterialPageRoute(
                           builder: (_) => SettingsPage(
-                            myName: _myName,
-                            partnerName: _partnerName,
+                            myName: _member1Name,
+                            partnerName: _member2Name,
                           ),
                         ),
                       );
+                      // 設定画面から戻ってきた後、名前を再取得
+                      await _loadSettings();
                     },
                   ),
                 ),
@@ -582,11 +600,13 @@ class _HomePageState extends State<HomePage> {
 class AddPaymentPage extends StatefulWidget {
   final Payment? initial;
   final bool isEditing;
-  final String myName;
-  final String partnerName;
+  final String member1Name;
+  final String member2Name;
 
-  const AddPaymentPage({super.key, this.initial, required this.myName, required this.partnerName})
-      : isEditing = initial != null;
+  const AddPaymentPage({super.key, this.initial, required String myName, required String partnerName})
+      : member1Name = myName,
+        member2Name = partnerName,
+        isEditing = initial != null;
 
   @override
   State<AddPaymentPage> createState() => _AddPaymentPageState();
@@ -596,7 +616,7 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
   final _formKey = GlobalKey<FormState>();
   late String _item;
   late int _amount;
-  late String _payer;
+  late int _payer;
   late double _myRatio;
   late DateTime _date;
   final List<String> _categories = ['食費', '水道光熱費', '旅行代'];
@@ -611,7 +631,7 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
     super.initState();
     _item = widget.initial?.item ?? '';
     _amount = widget.initial?.amount ?? 0;
-    _payer = widget.initial?.payer ?? '自分';
+    _payer = widget.initial?.payer ?? 1;
     _myRatio = widget.initial?.myRatio ?? 0.7;
     _date = widget.initial?.date ?? DateTime.now();
     _selectedCategory = widget.initial?.category ?? '食費';
@@ -659,13 +679,13 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
                 keyboardType: TextInputType.number,
                 onSaved: (v) => _amount = int.tryParse(v ?? '0') ?? 0,
               ),
-              DropdownButtonFormField<String>(
+              DropdownButtonFormField<int>(
                 value: _payer,
                 items: [
-                  DropdownMenuItem(value: '自分', child: Text(widget.myName)),
-                  DropdownMenuItem(value: '相手', child: Text(widget.partnerName)),
+                  DropdownMenuItem(value: 1, child: Text(widget.member1Name)),
+                  DropdownMenuItem(value: 2, child: Text(widget.member2Name)),
                 ],
-                onChanged: (v) => setState(() => _payer = v ?? '自分'),
+                onChanged: (v) => setState(() => _payer = v ?? 1),
                 decoration: const InputDecoration(labelText: '支払者'),
               ),
               // Tag selection (color chips)
@@ -731,8 +751,8 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
               Padding(
                 padding: const EdgeInsets.only(top: 8.0, bottom: 16.0),
                 child: Text(
-                  '${widget.myName}の負担額: ${( _amount * _myRatio ).round()} 円\n'
-                  '差額（${widget.myName}基準）: ${_payer == "自分" ? (_amount * (1 - _myRatio)).round() : -( _amount * _myRatio ).round()} 円',
+                  '${widget.member1Name}の負担額: ${( _amount * _myRatio ).round()} 円\n'
+                  '差額（${widget.member1Name}基準）: ${_payer == 1 ? (_amount * (1 - _myRatio)).round() : -( _amount * _myRatio ).round()} 円',
                   style: const TextStyle(fontSize: 14),
                 ),
               ),
@@ -795,9 +815,11 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
 }
 
 class SettingsPage extends StatefulWidget {
-  final String myName;
-  final String partnerName;
-  const SettingsPage({super.key, required this.myName, required this.partnerName});
+  final String member1Name;
+  final String member2Name;
+  const SettingsPage({super.key, required String myName, required String partnerName})
+      : member1Name = myName,
+        member2Name = partnerName;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -820,17 +842,21 @@ class _SettingsPageState extends State<SettingsPage> {
                   context,
                   MaterialPageRoute(
                     builder: (_) => NameSettingsPage(
-                      myName: widget.myName,
-                      partnerName: widget.partnerName,
+                      member1Name: widget.member1Name,
+                      member2Name: widget.member2Name,
                     ),
                   ),
                 );
                 if (result != null) {
                   // Firestoreに名前情報を保存
                   await FirebaseFirestore.instance.collection('settings').doc('names').set({
-                    'myName': result['myName'] ?? widget.myName,
-                    'partnerName': result['partnerName'] ?? widget.partnerName,
+                    'member1Name': result['member1Name'] ?? widget.member1Name,
+                    'member2Name': result['member2Name'] ?? widget.member2Name,
                   });
+                  // SharedPreferencesにも保存
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setString('member1Name', result['member1Name']!);
+                  await prefs.setString('member2Name', result['member2Name']!);
                 }
               },
             ),
@@ -842,8 +868,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   context,
                   MaterialPageRoute(
                     builder: (_) => TagSettingsPage(
-                      myName: widget.myName,
-                      partnerName: widget.partnerName,
+                      myName: widget.member1Name,
+                      partnerName: widget.member2Name,
                     ),
                   ),
                 );
@@ -857,29 +883,29 @@ class _SettingsPageState extends State<SettingsPage> {
 }
 
 class NameSettingsPage extends StatefulWidget {
-  final String myName;
-  final String partnerName;
-  const NameSettingsPage({super.key, required this.myName, required this.partnerName});
+  final String member1Name;
+  final String member2Name;
+  const NameSettingsPage({super.key, required this.member1Name, required this.member2Name});
 
   @override
   State<NameSettingsPage> createState() => _NameSettingsPageState();
 }
 
 class _NameSettingsPageState extends State<NameSettingsPage> {
-  late final TextEditingController _myNameController;
-  late final TextEditingController _partnerNameController;
+  late final TextEditingController _member1NameController;
+  late final TextEditingController _member2NameController;
 
   @override
   void initState() {
     super.initState();
-    _myNameController = TextEditingController(text: widget.myName);
-    _partnerNameController = TextEditingController(text: widget.partnerName);
+    _member1NameController = TextEditingController(text: widget.member1Name);
+    _member2NameController = TextEditingController(text: widget.member2Name);
   }
 
   @override
   void dispose() {
-    _myNameController.dispose();
-    _partnerNameController.dispose();
+    _member1NameController.dispose();
+    _member2NameController.dispose();
     super.dispose();
   }
 
@@ -892,23 +918,24 @@ class _NameSettingsPageState extends State<NameSettingsPage> {
         child: Column(
           children: [
             TextField(
-              controller: _myNameController,
-              decoration: const InputDecoration(labelText: 'あなたの名前'),
+              controller: _member1NameController,
+              decoration: const InputDecoration(labelText: 'メンバー1の名前'),
             ),
             TextField(
-              controller: _partnerNameController,
-              decoration: const InputDecoration(labelText: '相手の名前'),
+              controller: _member2NameController,
+              decoration: const InputDecoration(labelText: 'メンバー2の名前'),
             ),
+            const SizedBox(height: 20),
             const SizedBox(height: 20),
             ElevatedButton(
               onPressed: () {
-                final myName = _myNameController.text.trim();
-                final partnerName = _partnerNameController.text.trim();
-                if (myName.isEmpty || partnerName.isEmpty) {
+                final member1Name = _member1NameController.text.trim();
+                final member2Name = _member2NameController.text.trim();
+                if (member1Name.isEmpty || member2Name.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('名前を入力してください')));
                   return;
                 }
-                Navigator.pop(context, {'myName': myName, 'partnerName': partnerName});
+                Navigator.pop(context, {'member1Name': member1Name, 'member2Name': member2Name});
               },
               child: const Text('保存'),
             ),
@@ -983,123 +1010,112 @@ class _TagSettingsPageState extends State<TagSettingsPage> {
             final tag = entry.value;
             return ListTile(
               leading: CircleAvatar(backgroundColor: tag.color),
-              title: Text(tag.name),
-              subtitle: Text('割合: ${(tag.ratio * 100).round()}%'),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
+              title: Row(
                 children: [
-                  IconButton(
-                    icon: const Icon(Icons.edit),
-                    onPressed: () async {
-                      final edited = await showDialog<Tag>(
-                        context: context,
-                        builder: (_) => _TagDialog(
-                          initial: tag,
-                          myName: widget.myName,
-                          partnerName: widget.partnerName,
-                        ),
-                      );
-                      if (edited != null) {
-                        setState(() => _tags[index] = edited);
-                        _saveTags();
-                      }
-                    },
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete),
-                    onPressed: () async {
-                      if (_defaultTagName == tag.name) {
-                        showDialog(
-                          context: context,
-                          builder: (_) => AlertDialog(
-                            title: const Text('削除できません'),
-                            content: Text('デフォルトのタグ「${tag.name}」は削除できません。'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('OK'),
-                              ),
-                            ],
-                          ),
-                        );
-                        return;
-                      }
-
-                      final confirm = await showDialog<bool>(
-                        context: context,
-                        builder: (_) => AlertDialog(
-                          title: const Text('削除の確認'),
-                          content: Text('タグ「${tag.name}」を削除しますか？\nこのタグを使用している明細はデフォルトのタグに変更されます。'),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(context, false),
-                              child: const Text('キャンセル'),
-                            ),
-                            TextButton(
-                              onPressed: () => Navigator.pop(context, true),
-                              child: const Text('削除'),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (confirm == true) {
-                        setState(() {
-                          _tags.removeAt(index);
-                          if (_defaultTagName == tag.name) _defaultTagName = null;
-                        });
-
-                      // Firestoreのpaymentsも更新
-                      final paymentsCollection = FirebaseFirestore.instance.collection('payments');
-                      final paymentsSnapshot = await paymentsCollection.get();
-                      for (final doc in paymentsSnapshot.docs) {
-                        final data = doc.data();
-                        if (data['category'] == tag.name) {
-                          await doc.reference.update({'category': _defaultTagName ?? '食費'});
-                        }
-                      }
-                      _saveTags();
-                      }
-                    },
-                  ),
+                  Text(tag.name),
+                  if (_defaultTagName == tag.name)
+                    const Padding(
+                      padding: EdgeInsets.only(left: 8.0),
+                      child: Text(
+                        'デフォルト',
+                        style: TextStyle(fontSize: 12, color: Colors.pink),
+                      ),
+                    ),
                 ],
               ),
+              subtitle: Text('割合: ${(tag.ratio * 100).round()}%'),
+              onTap: () async {
+                final result = await showDialog<Map<String, dynamic>>(
+                  context: context,
+                  builder: (_) => _TagDialog(
+                    initial: tag,
+                    myName: widget.myName,
+                    partnerName: widget.partnerName,
+                    isDefault: _defaultTagName == tag.name,
+                  ),
+                );
+                if (result != null) {
+                  if (result['delete'] == true && result['tag'] != null) {
+                    setState(() {
+                      _tags.removeAt(index);
+                    });
+                    _saveTags();
+                  } else if (result['tag'] != null) {
+                    setState(() {
+                      _tags[index] = result['tag'] as Tag;
+                      if (result['makeDefault'] == true) {
+                        _defaultTagName = (result['tag'] as Tag).name;
+                      }
+                    });
+                    _saveTags();
+                  }
+                }
+              },
+              onLongPress: () async {
+                // For deletion, keep the old logic for long press
+                if (_defaultTagName == tag.name) {
+                  showDialog(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      title: const Text('削除できません'),
+                      content: Text('デフォルトのタグ「${tag.name}」は削除できません。'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('OK'),
+                        ),
+                      ],
+                    ),
+                  );
+                  return;
+                }
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (_) => AlertDialog(
+                    title: const Text('削除の確認'),
+                    content: Text('タグ「${tag.name}」を削除しますか？\nこのタグを使用している明細はデフォルトのタグに変更されます。'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('キャンセル'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('削除'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm == true) {
+                  setState(() {
+                    _tags.removeAt(index);
+                  });
+                  _saveTags();
+                }
+              },
             );
           }),
           ElevatedButton(
             onPressed: () async {
-              final newTag = await showDialog<Tag>(
+              final result = await showDialog<Map<String, dynamic>>(
                 context: context,
                 builder: (_) => _TagDialog(
                   myName: widget.myName,
                   partnerName: widget.partnerName,
+                  isDefault: false,
                 ),
               );
-              if (newTag != null) {
-                setState(() => _tags.add(newTag));
+              if (result != null && result['tag'] != null) {
+                setState(() {
+                  _tags.add(result['tag'] as Tag);
+                  if (result['makeDefault'] == true) {
+                    _defaultTagName = (result['tag'] as Tag).name;
+                  }
+                });
                 _saveTags();
               }
             },
             child: const Text('タグを追加'),
-          ),
-          // Divider and Default Tag Selection
-          const Divider(),
-          const Padding(
-            padding: EdgeInsets.only(left: 16, top: 16),
-            child: Text('デフォルトタグの選択'),
-          ),
-          DropdownButtonFormField<String>(
-            value: _defaultTagName,
-            items: _tags.map((tag) => DropdownMenuItem(
-              value: tag.name,
-              child: Text(tag.name),
-            )).toList(),
-            onChanged: (value) {
-              setState(() {
-                _defaultTagName = value;
-              });
-              _saveTags();
-            },
-            hint: const Text('選択してください'),
           ),
         ],
       ),
@@ -1112,7 +1128,8 @@ class _TagDialog extends StatefulWidget {
   final Tag? initial;
   final String myName;
   final String partnerName;
-  const _TagDialog({this.initial, required this.myName, required this.partnerName});
+  final bool isDefault;
+  const _TagDialog({this.initial, required this.myName, required this.partnerName, this.isDefault = false});
   @override
   State<_TagDialog> createState() => _TagDialogState();
 }
@@ -1122,6 +1139,7 @@ class _TagDialogState extends State<_TagDialog> {
   late String _name;
   late double _ratio;
   late Color _color;
+  late bool makeDefault;
 
   @override
   void initState() {
@@ -1135,6 +1153,7 @@ class _TagDialogState extends State<_TagDialog> {
       _ratio = 0.5;
       _color = Colors.blue;
     }
+    makeDefault = widget.isDefault;
   }
 
   @override
@@ -1146,6 +1165,8 @@ class _TagDialogState extends State<_TagDialog> {
       Colors.blue,
       Colors.orange,
       Colors.purple,
+      Colors.yellow,
+      Colors.brown,
     ];
     return AlertDialog(
       title: Text(widget.initial != null ? 'タグを編集' : 'タグを追加'),
@@ -1188,6 +1209,8 @@ class _TagDialogState extends State<_TagDialog> {
                           Colors.blue: '青',
                           Colors.orange: 'オレンジ',
                           Colors.purple: '紫',
+                          Colors.yellow: '黄',
+                          Colors.brown: '茶',
                         }[color] ?? '色'
                       ),
                     ],
@@ -1195,17 +1218,75 @@ class _TagDialogState extends State<_TagDialog> {
                 );
               }).toList(),
             ),
+            CheckboxListTile(
+              value: makeDefault,
+              title: const Text('デフォルトにする'),
+              onChanged: (v) => setState(() => makeDefault = v ?? false),
+              controlAffinity: ListTileControlAffinity.leading,
+              contentPadding: EdgeInsets.zero,
+            ),
           ],
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('キャンセル')),
+        if (widget.initial != null)
+          TextButton(
+            onPressed: () async {
+              if (widget.isDefault) {
+                showDialog(
+                  context: context,
+                  builder: (_) => AlertDialog(
+                    title: const Text('削除できません'),
+                    content: Text('デフォルトのタグ「${widget.initial?.name ?? ''}」は削除できません。'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('OK'),
+                      ),
+                    ],
+                  ),
+                );
+                return;
+              }
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: const Text('削除の確認'),
+                  content: const Text('このタグを削除してもよろしいですか？'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('キャンセル'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('削除'),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm == true) {
+                Navigator.pop(context, {
+                  'delete': true,
+                  'tag': widget.initial,
+                });
+              }
+            },
+            child: const Text('削除', style: TextStyle(color: Colors.red)),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('キャンセル'),
+        ),
         ElevatedButton(
           child: Text(widget.initial != null ? '保存' : '追加'),
           onPressed: () {
             _formKey.currentState?.save();
             if (_name.isNotEmpty) {
-              Navigator.pop(context, Tag(name: _name, ratio: _ratio, color: _color));
+              Navigator.pop(context, {
+                'tag': Tag(name: _name, ratio: _ratio, color: _color),
+                'makeDefault': makeDefault,
+              });
             }
           },
         ),
