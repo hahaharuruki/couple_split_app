@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_options.dart';
 
 // タグクラス
@@ -26,7 +27,11 @@ class Tag {
   );
 }
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   runApp(const CoupleSplitApp());
 }
 
@@ -142,41 +147,55 @@ class _HomePageState extends State<HomePage> {
     _loadTags();
   }
   Future<void> _loadTags() async {
-    final prefs = await SharedPreferences.getInstance();
-    final tagData = prefs.getStringList('tags') ?? [];
+    final snapshot = await FirebaseFirestore.instance.collection('tags').get();
     setState(() {
-      _tags = tagData.map((s) => Tag.fromMap(jsonDecode(s))).toList();
+      _tags = snapshot.docs.map((doc) => Tag.fromMap(doc.data())).toList();
     });
   }
 
   Future<void> _loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _myName = prefs.getString('myName') ?? '自分';
-      _partnerName = prefs.getString('partnerName') ?? '相手';
-    });
+    final snapshot = await FirebaseFirestore.instance.collection('settings').doc('names').get();
+    if (snapshot.exists) {
+      final data = snapshot.data()!;
+      setState(() {
+        _myName = data['myName'] ?? '自分';
+        _partnerName = data['partnerName'] ?? '相手';
+      });
+    }
   }
 
 
 
   @pragma('vm:entry-point')
   Future<void> _savePayments() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = payments.map((p) => jsonEncode(p.toMap())).toList();
-    await prefs.setStringList('payments', data);
-    await prefs.setStringList('settledMonths', _settledMonths.toList());
+    // Firestore保存のみ
+    // 既存のpaymentsコレクションを一旦全削除してから再追加（単純化のため）
+    final batch = FirebaseFirestore.instance.batch();
+    final paymentsCollection = FirebaseFirestore.instance.collection('payments');
+    final snapshot = await paymentsCollection.get();
+    for (final doc in snapshot.docs) {
+      batch.delete(doc.reference);
+    }
+    for (final p in payments) {
+      batch.set(paymentsCollection.doc(), p.toMap());
+    }
+    await batch.commit();
+    // 精算月情報もFirestoreに保存
+    await FirebaseFirestore.instance.collection('settings').doc('settled').set({
+      'months': _settledMonths.toList(),
+    });
   }
 
   Future<void> _loadPayments() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getStringList('payments') ?? [];
-    final settled = prefs.getStringList('settledMonths') ?? [];
+    final snapshot = await FirebaseFirestore.instance.collection('payments').get();
     setState(() {
-      payments = data
-          .map((p) => Payment.fromMap(jsonDecode(p) as Map<String, dynamic>))
-          .toList();
-      _settledMonths = settled.toSet();
+      payments = snapshot.docs.map((doc) => Payment.fromMap(doc.data())).toList();
     });
+
+    final settings = await FirebaseFirestore.instance.collection('settings').doc('settled').get();
+    if (settings.exists) {
+      _settledMonths = Set<String>.from(settings.data()?['months'] ?? []);
+    }
   }
 
   void _addPayment(Payment payment) {
@@ -597,22 +616,16 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
     _date = widget.initial?.date ?? DateTime.now();
     _selectedCategory = widget.initial?.category ?? '食費';
 
-    // Load tags and default tag from SharedPreferences
-    SharedPreferences.getInstance().then((prefs) {
-      final tagData = prefs.getStringList('tags') ?? [];
-      final defaultTagName = prefs.getString('defaultTagName');
+    // Load tags from Firestore
+    FirebaseFirestore.instance.collection('tags').get().then((snapshot) {
+      final tags = snapshot.docs.map((doc) => Tag.fromMap(doc.data())).toList();
       setState(() {
-        _tags = tagData.map((s) => Tag.fromMap(jsonDecode(s))).toList();
-        // Set selectedTag based on initial category if editing, otherwise use defaultTagName, otherwise first tag if exists
+        _tags = tags;
+        // Set selectedTag based on initial category if editing, otherwise first tag if exists
         if (_tags.isNotEmpty) {
           if (widget.initial != null) {
             _selectedTag = _tags.firstWhere(
               (tag) => tag.name == _selectedCategory,
-              orElse: () => _tags.first,
-            );
-          } else if (defaultTagName != null) {
-            _selectedTag = _tags.firstWhere(
-              (tag) => tag.name == defaultTagName,
               orElse: () => _tags.first,
             );
           } else {
@@ -813,9 +826,11 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 );
                 if (result != null) {
-                  SharedPreferences prefs = await SharedPreferences.getInstance();
-                  await prefs.setString('myName', result['myName'] ?? widget.myName);
-                  await prefs.setString('partnerName', result['partnerName'] ?? widget.partnerName);
+                  // Firestoreに名前情報を保存
+                  await FirebaseFirestore.instance.collection('settings').doc('names').set({
+                    'myName': result['myName'] ?? widget.myName,
+                    'partnerName': result['partnerName'] ?? widget.partnerName,
+                  });
                 }
               },
             ),
@@ -921,21 +936,39 @@ class _TagSettingsPageState extends State<TagSettingsPage> {
   @override
   void initState() {
     super.initState();
-    SharedPreferences.getInstance().then((prefs) {
-      final tagData = prefs.getStringList('tags') ?? [];
+    // Firestoreからタグを取得
+    FirebaseFirestore.instance.collection('tags').get().then((snapshot) {
       setState(() {
-        _tags = tagData.map((s) => Tag.fromMap(jsonDecode(s))).toList();
-        _defaultTagName = prefs.getString('defaultTagName');
+        _tags = snapshot.docs.map((doc) => Tag.fromMap(doc.data())).toList();
       });
+    });
+    FirebaseFirestore.instance.collection('settings').doc('defaultTag').get().then((doc) {
+      if (doc.exists && doc.data() != null) {
+        setState(() {
+          _defaultTagName = doc.data()!['name'];
+        });
+      }
     });
   }
 
   Future<void> _saveTags() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = _tags.map((t) => jsonEncode(t.toMap())).toList();
-    await prefs.setStringList('tags', data);
-    // Save default tag as well
-    await prefs.setString('defaultTagName', _defaultTagName ?? '');
+    // Firestoreにタグを保存
+    final batch = FirebaseFirestore.instance.batch();
+    final tagsCollection = FirebaseFirestore.instance.collection('tags');
+    // 既存タグ全削除
+    final snapshot = await tagsCollection.get();
+    for (final doc in snapshot.docs) {
+      batch.delete(doc.reference);
+    }
+    // 新しいタグを追加
+    for (final t in _tags) {
+      batch.set(tagsCollection.doc(), t.toMap());
+    }
+    await batch.commit();
+    // デフォルトタグもFirestoreに保存
+    await FirebaseFirestore.instance.collection('settings').doc('defaultTag').set({
+      'name': _defaultTagName ?? '',
+    });
   }
 
   @override
@@ -1015,17 +1048,16 @@ class _TagSettingsPageState extends State<TagSettingsPage> {
                           if (_defaultTagName == tag.name) _defaultTagName = null;
                         });
 
-                        final prefs = await SharedPreferences.getInstance();
-                        final paymentStrings = prefs.getStringList('payments') ?? [];
-                        final updatedPayments = paymentStrings.map((s) {
-                          final map = jsonDecode(s);
-                          if (map['category'] == tag.name) {
-                            map['category'] = _defaultTagName ?? '食費';
-                          }
-                          return jsonEncode(map);
-                        }).toList();
-                        await prefs.setStringList('payments', updatedPayments);
-                        _saveTags();
+                      // Firestoreのpaymentsも更新
+                      final paymentsCollection = FirebaseFirestore.instance.collection('payments');
+                      final paymentsSnapshot = await paymentsCollection.get();
+                      for (final doc in paymentsSnapshot.docs) {
+                        final data = doc.data();
+                        if (data['category'] == tag.name) {
+                          await doc.reference.update({'category': _defaultTagName ?? '食費'});
+                        }
+                      }
+                      _saveTags();
                       }
                     },
                   ),
