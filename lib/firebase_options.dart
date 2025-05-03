@@ -85,4 +85,5 @@ class DefaultFirebaseOptions {
     storageBucket: 'couple-split-app-6d55a.firebasestorage.app',
     measurementId: 'G-99FQVKDMGM',
   );
+
 }
