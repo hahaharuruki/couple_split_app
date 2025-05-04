@@ -132,6 +132,7 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  late String _groupId;
   List<Payment> payments = [];
   String _member1Name = 'メンバー1';
   String _member2Name = 'メンバー2';
@@ -155,19 +156,36 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _loadSettings();
-    _loadPayments();
-    _loadTags();
+    _loadGroupId().then((_) {
+      _loadSettings();
+      _loadPayments();
+      _loadTags();
+    });
   }
+
+  Future<void> _loadGroupId() async {
+    final prefs = await SharedPreferences.getInstance();
+    _groupId = prefs.getString('groupId') ?? 'defaultGroup';
+  }
+
   Future<void> _loadTags() async {
-    final snapshot = await FirebaseFirestore.instance.collection('tags').get();
+    final snapshot = await FirebaseFirestore.instance
+        .collection('groups')
+        .doc(_groupId)
+        .collection('tags')
+        .get();
     setState(() {
       _tags = snapshot.docs.map((doc) => Tag.fromMap(doc.data())).toList();
     });
   }
 
   Future<void> _loadSettings() async {
-    final snapshot = await FirebaseFirestore.instance.collection('settings').doc('names').get();
+    final snapshot = await FirebaseFirestore.instance
+        .collection('groups')
+        .doc(_groupId)
+        .collection('settings')
+        .doc('names')
+        .get();
     String member1Name = '';
     String member2Name = '';
     if (snapshot.exists) {
@@ -194,7 +212,10 @@ class _HomePageState extends State<HomePage> {
     // Firestore保存のみ
     // 既存のpaymentsコレクションを一旦全削除してから再追加（単純化のため）
     final batch = FirebaseFirestore.instance.batch();
-    final paymentsCollection = FirebaseFirestore.instance.collection('payments');
+    final paymentsCollection = FirebaseFirestore.instance
+        .collection('groups')
+        .doc(_groupId)
+        .collection('payments');
     final snapshot = await paymentsCollection.get();
     for (final doc in snapshot.docs) {
       batch.delete(doc.reference);
@@ -204,18 +225,32 @@ class _HomePageState extends State<HomePage> {
     }
     await batch.commit();
     // 精算月情報もFirestoreに保存
-    await FirebaseFirestore.instance.collection('settings').doc('settled').set({
+    await FirebaseFirestore.instance
+        .collection('groups')
+        .doc(_groupId)
+        .collection('settings')
+        .doc('settled')
+        .set({
       'months': _settledMonths.toList(),
     });
   }
 
   Future<void> _loadPayments() async {
-    final snapshot = await FirebaseFirestore.instance.collection('payments').get();
+    final snapshot = await FirebaseFirestore.instance
+        .collection('groups')
+        .doc(_groupId)
+        .collection('payments')
+        .get();
     setState(() {
       payments = snapshot.docs.map((doc) => Payment.fromMap(doc.data())).toList();
     });
 
-    final settings = await FirebaseFirestore.instance.collection('settings').doc('settled').get();
+    final settings = await FirebaseFirestore.instance
+        .collection('groups')
+        .doc(_groupId)
+        .collection('settings')
+        .doc('settled')
+        .get();
     if (settings.exists) {
       _settledMonths = Set<String>.from(settings.data()?['months'] ?? []);
     }
@@ -962,6 +997,46 @@ class _SettingsPageState extends State<SettingsPage> {
                 }
               },
             ),
+            // --- グループID設定タイル追加ここから ---
+            ListTile(
+              title: const Text('グループID設定'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () async {
+                final prefs = await SharedPreferences.getInstance();
+                final current = prefs.getString('groupId') ?? 'defaultGroup';
+                final controller = TextEditingController(text: current);
+                final result = await showDialog<String>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('グループIDを入力'),
+                    content: TextField(
+                      controller: controller,
+                      decoration: const InputDecoration(
+                        labelText: 'Group ID',
+                        hintText: '例: couple123',
+                      ),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('キャンセル'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, controller.text.trim()),
+                        child: const Text('保存'),
+                      ),
+                    ],
+                  ),
+                );
+                if (result != null && result.isNotEmpty) {
+                  await prefs.setString('groupId', result);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('グループIDを保存しました。再起動で反映されます')),
+                  );
+                }
+              },
+            ),
+            // --- グループID設定タイル追加ここまで ---
           ],
         ),
       ),
@@ -1047,11 +1122,24 @@ class _TagSettingsPageState extends State<TagSettingsPage> {
   List<Tag> _tags = [];
   String? _defaultTagName;
 
+  late String _groupId;
+
   @override
   void initState() {
     super.initState();
+    _loadGroupIdAndTags();
+  }
+
+  Future<void> _loadGroupIdAndTags() async {
+    final prefs = await SharedPreferences.getInstance();
+    _groupId = prefs.getString('groupId') ?? 'defaultGroup';
     // Firestoreからタグを取得
-    FirebaseFirestore.instance.collection('tags').get().then((snapshot) {
+    FirebaseFirestore.instance
+        .collection('groups')
+        .doc(_groupId)
+        .collection('tags')
+        .get()
+        .then((snapshot) {
       setState(() {
         _tags = snapshot.docs.map((doc) => Tag.fromMap(doc.data())).toList();
       });
