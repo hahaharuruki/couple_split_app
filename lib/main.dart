@@ -9,22 +9,20 @@ import 'firebase_options.dart';
 // タグクラス
 class Tag {
   final String name;
-  final double ratio;
+  final Map<int, int> ratios;
   final Color color;
 
-  Tag({required this.name, required this.ratio, required this.color});
+  Tag({required this.name, required this.ratios, required this.color});
 
   Map<String, dynamic> toMap() => {
         'name': name,
-        'ratio': ratio,
+        'ratios': ratios.map((key, value) => MapEntry(key.toString(), value)),
         'color': color.value,
       };
 
   factory Tag.fromMap(Map<String, dynamic> map) => Tag(
         name: map['name'],
-        ratio: map['ratio'] is int
-            ? (map['ratio'] as int).toDouble()
-            : map['ratio'],
+        ratios: Map<String, dynamic>.from(map['ratios'] ?? {}).map((k, v) => MapEntry(int.parse(k), (v ?? 1) as int)),
         color: Color(map['color']),
       );
 }
@@ -59,7 +57,7 @@ class Payment {
   final String item;
   final int amount;
   final int payer;
-  final double myRatio;
+  final Map<int, int> ratios;
   final String category;
   DateTime date;
 
@@ -67,20 +65,33 @@ class Payment {
     required this.item,
     required this.amount,
     required this.payer,
-    required this.myRatio,
+    required this.ratios,
     required this.category,
     required this.date,
   });
 
-  double get myShare => amount * myRatio;
-  double get partnerShare => amount * (1 - myRatio);
+  double get myShare {
+    if (!ratios.containsKey(1) || ratios[1] == null) return 0.0;
+    final totalUnits = ratios.values.fold(0, (a, b) => a + b);
+    final myRatio = ratios[1];
+    return (myRatio != null && totalUnits > 0) ? amount * (myRatio / totalUnits) : 0.0;
+  }
+
+  double get partnerShare {
+    if (!ratios.containsKey(2) || ratios[2] == null) return 0.0;
+    final totalUnits = ratios.values.fold(0, (a, b) => a + b);
+    final partnerRatio = ratios[2];
+    return (partnerRatio != null && totalUnits > 0) ? amount * (partnerRatio / totalUnits) : 0.0;
+  }
+
   double getMySettlement() {
-    // Positive: you should receive money; Negative: you owe money
+    if (!ratios.containsKey(1) || ratios[1] == null) return 0.0;
+    final totalUnits = ratios.values.fold(0, (a, b) => a + b);
+    final myRatio = ratios[1];
+    final myShare = (myRatio != null && totalUnits > 0) ? amount * (myRatio / totalUnits) : 0.0;
     if (payer == 1) {
-      // You paid the full amount, so partner owes you: amount minus your share
       return amount - myShare;
     } else {
-      // Partner paid, so you owe your share as a negative settlement
       return -myShare;
     }
   }
@@ -90,7 +101,7 @@ class Payment {
       'item': item,
       'amount': amount,
       'payer': payer,
-      'myRatio': myRatio,
+      'ratios': ratios.map((key, value) => MapEntry(key.toString(), value)),
       'category': category,
       'date': date.toIso8601String(),
     };
@@ -101,7 +112,7 @@ class Payment {
       item: map['item'],
       amount: map['amount'],
       payer: map['payer'] is String ? int.parse(map['payer']) : map['payer'],
-      myRatio: map['myRatio'],
+      ratios: Map<String, dynamic>.from(map['ratios'] ?? {}).map((k, v) => MapEntry(int.parse(k), v)),
       category: map['category'] ?? '食費',
       date: map.containsKey('date') ? DateTime.parse(map['date']) : DateTime.now(),
     );
@@ -406,6 +417,15 @@ class _HomePageState extends State<HomePage> {
                     final formattedDate = isThisYear
                         ? "${p.date.month}/${p.date.day}($weekday)"
                         : "${p.date.year}/${p.date.month}/${p.date.day}($weekday)";
+                    // Compute shares for display
+                    final ratios = p.ratios;
+                    final totalUnits = ratios.values.fold(0, (a, b) => a + b);
+                    final myShare = (ratios.containsKey(1) && ratios[1] != null && totalUnits > 0)
+                        ? p.amount * (ratios[1]! / totalUnits)
+                        : 0;
+                    final partnerShare = (ratios.containsKey(2) && ratios[2] != null && totalUnits > 0)
+                        ? p.amount * (ratios[2]! / totalUnits)
+                        : 0;
                     return ListTile(
                       leading: _isEditingMode
                           ? Checkbox(
@@ -421,7 +441,7 @@ class _HomePageState extends State<HomePage> {
                           : CircleAvatar(
                               backgroundColor: _tags.firstWhere(
                                 (tag) => tag.name == p.category,
-                                orElse: () => Tag(name: '', ratio: 0.5, color: Colors.grey),
+                                orElse: () => Tag(name: '', ratios: {1: 1, 2: 1}, color: Colors.grey),
                               ).color,
                               child: Text(
                                 p.category.characters.first,
@@ -429,8 +449,7 @@ class _HomePageState extends State<HomePage> {
                               ),
                             ),
                       title: Text('${p.item} - ${p.amount}円'),
-                      subtitle: Text(
-                        '$formattedDate｜${p.category}｜支払者: $payerDisplay'),
+                      subtitle: Text('$formattedDate｜${p.category}｜支払者: $payerDisplay'),
                       trailing: const Icon(Icons.chevron_right),
                       onTap: () async {
                         final result = await Navigator.push<PaymentAction>(
@@ -614,34 +633,43 @@ class AddPaymentPage extends StatefulWidget {
 
 class _AddPaymentPageState extends State<AddPaymentPage> {
   final _formKey = GlobalKey<FormState>();
-  late String _item;
-  late int _amount;
-  late int _payer;
-  late double _myRatio;
-  late DateTime _date;
+  String _item = '';
+  int _amount = 0;
+  int _payer = 1;
+  DateTime _date = DateTime.now();
   final List<String> _categories = ['食費', '水道光熱費', '旅行代'];
-  late String _selectedCategory;
-
+  String _selectedCategory = '食費';
   // Tag selection variables
   List<Tag> _tags = [];
   Tag? _selectedTag;
+  Map<int, int> _ratios = {1: 1, 2: 1};
+  final TextEditingController _ratio1Controller = TextEditingController();
+  final TextEditingController _ratio2Controller = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    _initialize();
+  }
+
+  Future<void> _initialize() async {
     _item = widget.initial?.item ?? '';
     _amount = widget.initial?.amount ?? 0;
-    _payer = widget.initial?.payer ?? 1;
-    _myRatio = widget.initial?.myRatio ?? 0.7;
+    final prefs = await SharedPreferences.getInstance();
+    _payer = widget.initial?.payer ?? (prefs.getInt('defaultPayer') ?? 1);
     _date = widget.initial?.date ?? DateTime.now();
     _selectedCategory = widget.initial?.category ?? '食費';
+    if (widget.initial != null) {
+      _ratios = Map<int, int>.from(widget.initial!.ratios);
+    }
+    _ratio1Controller.text = _ratios[1]?.toString() ?? '1';
+    _ratio2Controller.text = _ratios[2]?.toString() ?? '1';
 
     // Load tags from Firestore
     FirebaseFirestore.instance.collection('tags').get().then((snapshot) {
       final tags = snapshot.docs.map((doc) => Tag.fromMap(doc.data())).toList();
       setState(() {
         _tags = tags;
-        // Set selectedTag based on initial category if editing, otherwise first tag if exists
         if (_tags.isNotEmpty) {
           if (widget.initial != null) {
             _selectedTag = _tags.firstWhere(
@@ -650,16 +678,37 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
             );
           } else {
             _selectedTag = _tags.first;
+            _selectedCategory = _selectedTag!.name;
+            _ratios = Map<int, int>.from(_selectedTag!.ratios);
+            _ratio1Controller.text = _ratios[1]?.toString() ?? '1';
+            _ratio2Controller.text = _ratios[2]?.toString() ?? '1';
           }
-          _myRatio = _selectedTag!.ratio;
-          _selectedCategory = _selectedTag!.name;
         }
       });
     });
   }
 
   @override
+  void dispose() {
+    _ratio1Controller.dispose();
+    _ratio2Controller.dispose();
+    super.dispose();
+  }
+
+  void _updateRatiosFromText() {
+    final r1 = int.tryParse(_ratio1Controller.text) ?? 1;
+    final r2 = int.tryParse(_ratio2Controller.text) ?? 1;
+    setState(() {
+      _ratios = {1: r1, 2: r2};
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final totalUnits = _ratios.values.fold(0, (a, b) => a + b);
+    final myShare = totalUnits > 0 ? (_amount * (_ratios[1]! / totalUnits)).round() : 0;
+    final partnerShare = totalUnits > 0 ? (_amount * (_ratios[2]! / totalUnits)).round() : 0;
+    final diff = _payer == 1 ? (_amount - myShare) : -myShare;
     return Scaffold(
       appBar: AppBar(title: Text(widget.isEditing ? '支払いを編集' : '支払いを追加')),
       body: Padding(
@@ -701,8 +750,10 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
                       onSelected: (_) {
                         setState(() {
                           _selectedTag = tag;
-                          _myRatio = tag.ratio;
                           _selectedCategory = tag.name;
+                          _ratios = Map<int, int>.from(tag.ratios);
+                          _ratio1Controller.text = _ratios[1]?.toString() ?? '1';
+                          _ratio2Controller.text = _ratios[2]?.toString() ?? '1';
                         });
                       },
                       backgroundColor: tag.color.withOpacity(0.4),
@@ -740,19 +791,33 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
                   if (picked != null) setState(() => _date = picked);
                 },
               ),
-              Slider(
-                label: '負担割合: ${(_myRatio * 100).round()}%',
-                value: _myRatio,
-                min: 0,
-                max: 1,
-                divisions: 10,
-                onChanged: (v) => setState(() => _myRatio = v),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _ratio1Controller,
+                      decoration: InputDecoration(labelText: '${widget.member1Name}の単位'),
+                      keyboardType: TextInputType.number,
+                      onChanged: (_) => _updateRatiosFromText(),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _ratio2Controller,
+                      decoration: InputDecoration(labelText: '${widget.member2Name}の単位'),
+                      keyboardType: TextInputType.number,
+                      onChanged: (_) => _updateRatiosFromText(),
+                    ),
+                  ),
+                ],
               ),
               Padding(
                 padding: const EdgeInsets.only(top: 8.0, bottom: 16.0),
                 child: Text(
-                  '${widget.member1Name}の負担額: ${( _amount * _myRatio ).round()} 円\n'
-                  '差額（${widget.member1Name}基準）: ${_payer == 1 ? (_amount * (1 - _myRatio)).round() : -( _amount * _myRatio ).round()} 円',
+                  '${widget.member1Name}の負担額: $myShare 円\n'
+                  '${widget.member2Name}の負担額: $partnerShare 円\n'
+                  '差額（${widget.member1Name}基準）: $diff 円',
                   style: const TextStyle(fontSize: 14),
                 ),
               ),
@@ -791,12 +856,13 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
                     child: Text(widget.isEditing ? '保存' : '追加'),
                     onPressed: () {
                       _formKey.currentState?.save();
-                      if (_item.isNotEmpty && _amount > 0) {
+                      _updateRatiosFromText();
+                      if (_item.isNotEmpty && _amount > 0 && _ratios[1]! > 0 && _ratios[2]! > 0) {
                         final payment = Payment(
                           item: _item,
                           amount: _amount,
                           payer: _payer,
-                          myRatio: _myRatio,
+                          ratios: Map<int, int>.from(_ratios),
                           category: _selectedCategory,
                           date: _date,
                         );
@@ -873,6 +939,27 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ),
                 );
+              },
+            ),
+            ListTile(
+              title: const Text('デフォルト支払者'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () async {
+                final prefs = await SharedPreferences.getInstance();
+                final current = prefs.getInt('defaultPayer') ?? 1;
+                final selected = await Navigator.push<int>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => DefaultPayerSettingsPage(
+                      current,
+                      widget.member1Name,
+                      widget.member2Name,
+                    ),
+                  ),
+                );
+                if (selected != null) {
+                  await prefs.setInt('defaultPayer', selected);
+                }
               },
             ),
           ],
@@ -970,9 +1057,10 @@ class _TagSettingsPageState extends State<TagSettingsPage> {
       });
     });
     FirebaseFirestore.instance.collection('settings').doc('defaultTag').get().then((doc) {
-      if (doc.exists && doc.data() != null) {
+      final data = doc.data();
+      if (doc.exists && data != null && data['name'] != null) {
         setState(() {
-          _defaultTagName = doc.data()!['name'];
+          _defaultTagName = data['name'];
         });
       }
     });
@@ -1023,7 +1111,6 @@ class _TagSettingsPageState extends State<TagSettingsPage> {
                     ),
                 ],
               ),
-              subtitle: Text('割合: ${(tag.ratio * 100).round()}%'),
               onTap: () async {
                 final result = await showDialog<Map<String, dynamic>>(
                   context: context,
@@ -1137,23 +1224,42 @@ class _TagDialog extends StatefulWidget {
 class _TagDialogState extends State<_TagDialog> {
   final _formKey = GlobalKey<FormState>();
   late String _name;
-  late double _ratio;
+  late Map<int, int> _ratios;
   late Color _color;
   late bool makeDefault;
+  final TextEditingController _ratio1Controller = TextEditingController();
+  final TextEditingController _ratio2Controller = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     if (widget.initial != null) {
       _name = widget.initial!.name;
-      _ratio = widget.initial!.ratio;
+      _ratios = Map<int, int>.from(widget.initial!.ratios);
       _color = widget.initial!.color;
     } else {
       _name = '';
-      _ratio = 0.5;
+      _ratios = {1: 1, 2: 1};
       _color = Colors.blue;
     }
     makeDefault = widget.isDefault;
+    _ratio1Controller.text = _ratios[1]?.toString() ?? '1';
+    _ratio2Controller.text = _ratios[2]?.toString() ?? '1';
+  }
+
+  @override
+  void dispose() {
+    _ratio1Controller.dispose();
+    _ratio2Controller.dispose();
+    super.dispose();
+  }
+
+  void _updateRatiosFromText() {
+    final r1 = int.tryParse(_ratio1Controller.text) ?? 1;
+    final r2 = int.tryParse(_ratio2Controller.text) ?? 1;
+    setState(() {
+      _ratios = {1: r1, 2: r2};
+    });
   }
 
   @override
@@ -1168,6 +1274,9 @@ class _TagDialogState extends State<_TagDialog> {
       Colors.yellow,
       Colors.brown,
     ];
+    final totalUnits = _ratios.values.reduce((a, b) => a + b);
+    final percent1 = totalUnits > 0 ? (_ratios[1]! / totalUnits * 100).round() : 50;
+    final percent2 = totalUnits > 0 ? (_ratios[2]! / totalUnits * 100).round() : 50;
     return AlertDialog(
       title: Text(widget.initial != null ? 'タグを編集' : 'タグを追加'),
       content: Form(
@@ -1182,15 +1291,28 @@ class _TagDialogState extends State<_TagDialog> {
             ),
             const Align(
               alignment: Alignment.centerLeft,
-              child: Text('負担割合'),
+              child: Text('負担単位'),
             ),
-            Slider(
-              label: '${widget.myName}: ${(_ratio * 100).round()}% / ${widget.partnerName}: ${(100 - _ratio * 100).round()}%',
-              value: _ratio,
-              min: 0.0,
-              max: 1.0,
-              divisions: 10,
-              onChanged: (v) => setState(() => _ratio = v),
+            Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: _ratio1Controller,
+                    decoration: InputDecoration(labelText: '${widget.myName}の単位'),
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => _updateRatiosFromText(),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: TextFormField(
+                    controller: _ratio2Controller,
+                    decoration: InputDecoration(labelText: '${widget.partnerName}の単位'),
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => _updateRatiosFromText(),
+                  ),
+                ),
+              ],
             ),
             DropdownButton<Color>(
               value: predefinedColors.firstWhere((c) => c.value == _color.value, orElse: () => predefinedColors.first),
@@ -1282,15 +1404,64 @@ class _TagDialogState extends State<_TagDialog> {
           child: Text(widget.initial != null ? '保存' : '追加'),
           onPressed: () {
             _formKey.currentState?.save();
-            if (_name.isNotEmpty) {
+            _updateRatiosFromText();
+            if (_name.isNotEmpty && _ratios[1]! > 0 && _ratios[2]! > 0) {
               Navigator.pop(context, {
-                'tag': Tag(name: _name, ratio: _ratio, color: _color),
+                'tag': Tag(name: _name, ratios: Map<int, int>.from(_ratios), color: _color),
                 'makeDefault': makeDefault,
               });
             }
           },
         ),
       ],
+    );
+  }
+}
+// デフォルト支払者設定ページ
+class DefaultPayerSettingsPage extends StatefulWidget {
+  final int current;
+  final String member1Name;
+  final String member2Name;
+
+  const DefaultPayerSettingsPage(this.current, this.member1Name, this.member2Name, {super.key});
+
+  @override
+  State<DefaultPayerSettingsPage> createState() => _DefaultPayerSettingsPageState();
+}
+
+class _DefaultPayerSettingsPageState extends State<DefaultPayerSettingsPage> {
+  late int _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.current;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('デフォルト支払者')),
+      body: Column(
+        children: [
+          RadioListTile<int>(
+            title: Text(widget.member1Name),
+            value: 1,
+            groupValue: _selected,
+            onChanged: (val) => setState(() => _selected = val!),
+          ),
+          RadioListTile<int>(
+            title: Text(widget.member2Name),
+            value: 2,
+            groupValue: _selected,
+            onChanged: (val) => setState(() => _selected = val!),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, _selected),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
     );
   }
 }
