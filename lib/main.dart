@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -199,13 +198,13 @@ class _HomePageState extends State<HomePage> {
       member1Name = data['member1Name'] ?? '';
       member2Name = data['member2Name'] ?? '';
     }
-    final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _member1Name = member1Name.isNotEmpty ? member1Name : (prefs.getString('member1Name') ?? 'メンバー1');
-      _member2Name = member2Name.isNotEmpty ? member2Name : (prefs.getString('member2Name') ?? 'メンバー2');
+      _member1Name = member1Name.isNotEmpty ? member1Name : 'メンバー1';
+      _member2Name = member2Name.isNotEmpty ? member2Name : 'メンバー2';
     });
     // Firestore取得できた場合はSharedPreferencesにも保存
     if (member1Name.isNotEmpty && member2Name.isNotEmpty) {
+      final prefs = await SharedPreferences.getInstance();
       await prefs.setString('member1Name', member1Name);
       await prefs.setString('member2Name', member2Name);
     }
@@ -588,8 +587,7 @@ class _HomePageState extends State<HomePage> {
             ),
             SizedBox(
               height: 50,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
+              child: Row(
                 children: [
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -600,17 +598,22 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ),
                   ),
-                  ..._generatePastMonths().map((m) {
-                    final monthNum = int.parse(m.split('-')[1]);
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: ChoiceChip(
-                        label: Text("$monthNum月"),
-                        selected: m == _selectedMonth,
-                        onSelected: (_) => setState(() => _selectedMonth = m),
-                      ),
-                    );
-                  }),
+                  Expanded(
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      children: _generatePastMonths().map((m) {
+                        final monthNum = int.parse(m.split('-')[1]);
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: ChoiceChip(
+                            label: Text("$monthNum月"),
+                            selected: m == _selectedMonth,
+                            onSelected: (_) => setState(() => _selectedMonth = m),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -705,7 +708,7 @@ class _HomePageState extends State<HomePage> {
                         final result = await Navigator.push<PaymentAction>(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => AddPaymentPage(initial: p, myName: _member1Name, partnerName: _member2Name),
+                            builder: (_) => AddPaymentPage(initial: p, myName: _member1Name, partnerName: _member2Name, groupId: _groupId),
                           ),
                         );
                         if (result != null) {
@@ -802,7 +805,7 @@ class _HomePageState extends State<HomePage> {
           final result = await Navigator.push<PaymentAction>(
             context,
             MaterialPageRoute(
-              builder: (_) => AddPaymentPage(myName: _member1Name, partnerName: _member2Name),
+              builder: (_) => AddPaymentPage(myName: _member1Name, partnerName: _member2Name, groupId: _groupId),
             ),
           );
           if (result != null && !result.delete && result.updated != null) {
@@ -815,33 +818,6 @@ class _HomePageState extends State<HomePage> {
         backgroundColor: Colors.pink,
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      bottomNavigationBar: BottomAppBar(
-        shape: const CircularNotchedRectangle(),
-        notchMargin: 12.0,
-        child: SizedBox(
-          height: 80,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              Expanded(
-                child: Align(
-                  alignment: Alignment.center,
-                  child: IconButton(
-                    icon: const Icon(Icons.home),
-                    padding: EdgeInsets.zero,
-                    iconSize: 28,
-                    onPressed: () {},
-                  ),
-                ),
-              ),
-              const SizedBox(width: 48), // space for FAB
-              Expanded(
-                child: Container(),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
@@ -851,9 +827,15 @@ class AddPaymentPage extends StatefulWidget {
   final bool isEditing;
   final String member1Name;
   final String member2Name;
+  final String groupId;
 
-  const AddPaymentPage({super.key, this.initial, required String myName, required String partnerName})
-      : member1Name = myName,
+  const AddPaymentPage({
+    super.key,
+    this.initial,
+    required String myName,
+    required String partnerName,
+    required this.groupId,
+  })  : member1Name = myName,
         member2Name = partnerName,
         isEditing = initial != null;
 
@@ -885,43 +867,41 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
   Future<void> _initialize() async {
     _item = widget.initial?.item ?? '';
     _amount = widget.initial?.amount ?? 0;
-    final prefs = await SharedPreferences.getInstance();
-    _payer = widget.initial?.payer ?? (prefs.getInt('defaultPayer') ?? 1);
+    _payer = widget.initial?.payer ?? 1;
     _date = widget.initial?.date ?? DateTime.now();
-    _selectedCategory = widget.initial?.category ?? '食費';
+    _selectedCategory = widget.initial?.category ?? '-';
     if (widget.initial != null) {
       _ratios = Map<int, int>.from(widget.initial!.ratios);
     }
     _ratio1Controller.text = _ratios[1]?.toString() ?? '1';
     _ratio2Controller.text = _ratios[2]?.toString() ?? '1';
 
-    // Load tags from Firestore using groupId
-    final groupId = prefs.getString('groupId') ?? 'defaultGroup';
-    FirebaseFirestore.instance
+    // Always use widget.groupId to fetch tags
+    final snapshot = await FirebaseFirestore.instance
         .collection('groups')
-        .doc(groupId)
+        .doc(widget.groupId)
         .collection('tags')
-        .get()
-        .then((snapshot) {
-      final tags = snapshot.docs.map((doc) => Tag.fromMap(doc.data())).toList();
-      tags.sort((a, b) => a.order.compareTo(b.order));
-      setState(() {
-        _tags = tags;
-        if (_tags.isNotEmpty) {
-          if (widget.initial != null) {
-            _selectedTag = _tags.firstWhere(
-              (tag) => tag.name == _selectedCategory,
-              orElse: () => _tags.first,
-            );
-          } else {
-            _selectedTag = _tags.first;
-            _selectedCategory = _selectedTag!.name;
-            _ratios = Map<int, int>.from(_selectedTag!.ratios);
-            _ratio1Controller.text = _ratios[1]?.toString() ?? '1';
-            _ratio2Controller.text = _ratios[2]?.toString() ?? '1';
-          }
+        .get();
+
+    final tags = snapshot.docs.map((doc) => Tag.fromMap(doc.data())).toList();
+    tags.sort((a, b) => a.order.compareTo(b.order));
+
+    setState(() {
+      _tags = tags;
+      if (_tags.isNotEmpty) {
+        if (widget.initial != null) {
+          _selectedTag = _tags.firstWhere(
+            (tag) => tag.name == _selectedCategory,
+            orElse: () => _tags.first,
+          );
+        } else {
+          _selectedTag = _tags.first;
+          _selectedCategory = _selectedTag!.name;
+          _ratios = Map<int, int>.from(_selectedTag!.ratios);
+          _ratio1Controller.text = _ratios[1]?.toString() ?? '1';
+          _ratio2Controller.text = _ratios[2]?.toString() ?? '1';
         }
-      });
+      }
     });
   }
 
@@ -999,21 +979,6 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
                         });
                       },
                       backgroundColor: tag.color.withOpacity(0.4),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 12),
-              ]
-              else ...[
-                // Fallback: category selection if no tags
-                Wrap(
-                  spacing: 8,
-                  children: _categories.map((cat) {
-                    final isSelected = _selectedCategory == cat;
-                    return ChoiceChip(
-                      label: Text(cat),
-                      selected: isSelected,
-                      onSelected: (_) => setState(() => _selectedCategory = cat),
                     );
                   }).toList(),
                 ),
@@ -1391,9 +1356,9 @@ class _TagSettingsPageState extends State<TagSettingsPage> {
       ),
       body: Column(
         children: [
-          Expanded(
-            child: _isReorderMode
-                ? ReorderableListView(
+          _isReorderMode
+              ? Expanded(
+                  child: ReorderableListView(
                     padding: const EdgeInsets.all(16),
                     children: [
                       for (final entry in _tags.asMap().entries)
@@ -1421,11 +1386,16 @@ class _TagSettingsPageState extends State<TagSettingsPage> {
                       });
                       _saveTags();
                     },
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _tags.length,
-                    itemBuilder: (context, idx) {
+                  ),
+                )
+              :
+              // ListView.builder with "タグを追加" button at the end
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: _tags.length + 1,
+                  itemBuilder: (context, idx) {
+                    if (idx < _tags.length) {
                       final tag = _tags[idx];
                       return Container(
                         margin: const EdgeInsets.symmetric(vertical: 4),
@@ -1450,30 +1420,33 @@ class _TagSettingsPageState extends State<TagSettingsPage> {
                           },
                         ),
                       );
-                    },
-                  ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: ElevatedButton(
-              onPressed: () async {
-                final result = await showDialog<Map<String, dynamic>>(
-                  context: context,
-                  builder: (_) => _TagDialog(
-                    myName: widget.myName,
-                    partnerName: widget.partnerName,
-                  ),
-                );
-                if (result != null && result['tag'] != null) {
-                  setState(() {
-                    _tags.add(result['tag'] as Tag);
-                  });
-                  _saveTags();
-                }
-              },
-              child: const Text('タグを追加'),
-            ),
-          ),
+                    } else {
+                      // タグを追加ボタン
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            final result = await showDialog<Map<String, dynamic>>(
+                              context: context,
+                              builder: (_) => _TagDialog(
+                                myName: widget.myName,
+                                partnerName: widget.partnerName,
+                              ),
+                            );
+                            if (result != null && result['tag'] != null) {
+                              setState(() {
+                                _tags.add(result['tag'] as Tag);
+                              });
+                              _saveTags();
+                            }
+                          },
+                          child: const Text('タグを追加'),
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ),
         ],
       ),
     );
