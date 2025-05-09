@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:couple_split_app/models/payment.dart';
 import 'package:couple_split_app/models/tag.dart';
 import 'package:intl/intl.dart';
@@ -7,6 +8,7 @@ import 'package:intl/intl.dart';
 /// onSave: 保存時に呼ばれるコールバック
 /// onDelete: 編集時に削除時コールされるコールバック（新規追加なら null）
 class AddPaymentPage extends StatefulWidget {
+  final String groupId;
   final String myName;
   final String partnerName;
   final void Function(Payment payment) onSave;
@@ -15,6 +17,7 @@ class AddPaymentPage extends StatefulWidget {
 
   const AddPaymentPage({
     super.key,
+    required this.groupId,
     required this.myName,
     required this.partnerName,
     required this.onSave,
@@ -40,14 +43,16 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
   @override
   void initState() {
     super.initState();
+    _loadTags();
     final init = widget.initial;
     _itemController = TextEditingController(text: init?.item ?? '');
-    _amountController = TextEditingController(text: init != null ? '${init.amount}' : '');
+    _amountController = TextEditingController(
+      text: init != null ? '${init.amount}' : '',
+    );
     _payer = init?.payer ?? 1;
     _ratios = init?.ratios ?? {1: 1, 2: 1};
     _date = init?.date ?? DateTime.now();
     _category = init?.category ?? '';
-    // TODO: Firestoreからタグ取得するならここでセット
   }
 
   @override
@@ -55,6 +60,23 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
     _itemController.dispose();
     _amountController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadTags() async {
+    final snap =
+        await FirebaseFirestore.instance
+            .collection('groups')
+            .doc(widget.groupId)
+            .collection('tags')
+            .orderBy('order')
+            .get();
+    setState(() {
+      _tags = snap.docs.map((d) => Tag.fromMap(d.data())).toList();
+      if (_tags.isNotEmpty) {
+        _category = _tags.first.name;
+        _selectedTag = _tags.first;
+      }
+    });
   }
 
   void _save() {
@@ -90,14 +112,21 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
               onPressed: () async {
                 final ok = await showDialog<bool>(
                   context: context,
-                  builder: (_) => AlertDialog(
-                    title: const Text('削除確認'),
-                    content: const Text('この支払いを削除しますか？'),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('キャンセル')),
-                      TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('削除')),
-                    ],
-                  ),
+                  builder:
+                      (_) => AlertDialog(
+                        title: const Text('削除確認'),
+                        content: const Text('この支払いを削除しますか？'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: const Text('キャンセル'),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, true),
+                            child: const Text('削除'),
+                          ),
+                        ],
+                      ),
                 );
                 if (ok == true) _delete();
               },
@@ -120,7 +149,11 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
                 controller: _amountController,
                 keyboardType: TextInputType.number,
                 decoration: const InputDecoration(labelText: '金額'),
-                validator: (v) => (v == null || int.tryParse(v) == null) ? '正しい金額を入力してください' : null,
+                validator:
+                    (v) =>
+                        (v == null || int.tryParse(v) == null)
+                            ? '正しい金額を入力してください'
+                            : null,
               ),
               const SizedBox(height: 8),
               DropdownButtonFormField<int>(
@@ -154,27 +187,53 @@ class _AddPaymentPageState extends State<AddPaymentPage> {
                   Expanded(
                     child: TextFormField(
                       initialValue: '${_ratios[1]}',
-                      decoration: InputDecoration(labelText: '${widget.myName} 単位'),
+                      decoration: InputDecoration(
+                        labelText: '${widget.myName} 単位',
+                      ),
                       keyboardType: TextInputType.number,
-                      onChanged: (v) => setState(() => _ratios[1] = int.tryParse(v) ?? 1),
+                      onChanged:
+                          (v) =>
+                              setState(() => _ratios[1] = int.tryParse(v) ?? 1),
                     ),
                   ),
                   const SizedBox(width: 16),
                   Expanded(
                     child: TextFormField(
                       initialValue: '${_ratios[2]}',
-                      decoration: InputDecoration(labelText: '${widget.partnerName} 単位'),
+                      decoration: InputDecoration(
+                        labelText: '${widget.partnerName} 単位',
+                      ),
                       keyboardType: TextInputType.number,
-                      onChanged: (v) => setState(() => _ratios[2] = int.tryParse(v) ?? 1),
+                      onChanged:
+                          (v) =>
+                              setState(() => _ratios[2] = int.tryParse(v) ?? 1),
                     ),
                   ),
                 ],
               ),
+              const SizedBox(height: 8),
+              // カテゴリ（タグ）選択をタイル形式で表示
+              if (_tags.isNotEmpty)
+                Wrap(
+                  spacing: 8.0,
+                  children:
+                      _tags.map((tag) {
+                        return ChoiceChip(
+                          label: Text(tag.name),
+                          selected: _category == tag.name,
+                          selectedColor: tag.color,
+                          backgroundColor: tag.color.withOpacity(0.3),
+                          onSelected: (selected) {
+                            setState(() {
+                              _category = selected ? tag.name : _category;
+                              _selectedTag = selected ? tag : _selectedTag;
+                            });
+                          },
+                        );
+                      }).toList(),
+                ),
               const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _save,
-                child: const Text('保存'),
-              ),
+              ElevatedButton(onPressed: _save, child: const Text('保存')),
             ],
           ),
         ),

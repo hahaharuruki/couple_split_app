@@ -53,14 +53,32 @@ class _GroupSelectionPageState extends State<GroupSelectionPage> {
     if (isNew) {
       final newGroupId = _generateRandomGroupId();
       final nameController = TextEditingController();
-      final groupName = await showDialog<String>(
+      final member1Controller = TextEditingController();
+      final member2Controller = TextEditingController();
+
+      final result = await showDialog<Map<String, String>>(
         context: context,
         builder:
             (context) => AlertDialog(
-              title: const Text('グループ名を入力'),
-              content: TextField(
-                controller: nameController,
-                decoration: const InputDecoration(hintText: 'グループ名'),
+              title: const Text('グループ情報を入力'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(hintText: 'グループ名'),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: member1Controller,
+                    decoration: const InputDecoration(hintText: 'メンバー1の名前'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: member2Controller,
+                    decoration: const InputDecoration(hintText: 'メンバー2の名前'),
+                  ),
+                ],
               ),
               actions: [
                 TextButton(
@@ -68,20 +86,41 @@ class _GroupSelectionPageState extends State<GroupSelectionPage> {
                   child: const Text('キャンセル'),
                 ),
                 TextButton(
-                  onPressed:
-                      () => Navigator.pop(context, nameController.text.trim()),
+                  onPressed: () {
+                    if (nameController.text.trim().isNotEmpty &&
+                        member1Controller.text.trim().isNotEmpty &&
+                        member2Controller.text.trim().isNotEmpty) {
+                      Navigator.pop(context, {
+                        'name': nameController.text.trim(),
+                        'member1': member1Controller.text.trim(),
+                        'member2': member2Controller.text.trim(),
+                      });
+                    }
+                  },
                   child: const Text('作成'),
                 ),
               ],
             ),
       );
-      if (groupName != null && groupName.isNotEmpty) {
+
+      if (result != null) {
+        final groupName = result['name']!;
+        final member1Name = result['member1']!;
+        final member2Name = result['member2']!;
+
+        // グループ情報を保存
         await FirebaseFirestore.instance
             .collection('groups')
             .doc(newGroupId)
             .collection('settings')
             .doc('groupInfo')
-            .set({'name': groupName});
+            .set({
+              'name': groupName,
+              'members': [
+                {'id': '0', 'name': member1Name},
+                {'id': '1', 'name': member2Name},
+              ],
+            });
 
         final prefs = await SharedPreferences.getInstance();
         final groupIds = prefs.getStringList('savedGroupIds') ?? [];
@@ -91,6 +130,9 @@ class _GroupSelectionPageState extends State<GroupSelectionPage> {
         }
         await prefs.setString('groupId', newGroupId);
         await prefs.setString('groupName_$newGroupId', groupName);
+        await prefs.setString('member1Name', member1Name);
+        await prefs.setString('member2Name', member2Name);
+
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => HomePage(groupId: newGroupId)),

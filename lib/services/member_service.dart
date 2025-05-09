@@ -1,13 +1,14 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 /// groupInfo から id='0','1' のメンバー名を取って Map で返す
-Future<Map<String,String>> fetchMemberNames(String groupId) async {
-  final doc = await FirebaseFirestore.instance
-    .collection('groups')
-    .doc(groupId)
-    .collection('settings')
-    .doc('groupInfo')
-    .get();
+Future<Map<String, String>> fetchMemberNames(String groupId) async {
+  final doc =
+      await FirebaseFirestore.instance
+          .collection('groups')
+          .doc(groupId)
+          .collection('settings')
+          .doc('groupInfo')
+          .get();
   final data = doc.data();
   if (data == null || !data.containsKey('members')) {
     return {'member1': '', 'member2': ''};
