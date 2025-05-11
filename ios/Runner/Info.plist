@@ -45,7 +45,16 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+<<<<<<< HEAD
 	<key>FirebaseAppDelegateProxyEnabled</key>
 	<false/>
+=======
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>このアプリはローカルネットワークを利用します</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_dartobservatory._tcp</string>
+	</array>
+>>>>>>> restore-firebase-commit
 </dict>
 </plist>

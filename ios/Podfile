@@ -1,4 +1,9 @@
+<<<<<<< HEAD
 platform :ios, '12.0'
+=======
+# Uncomment this line to define a global platform for your project
+platform :ios, '13.0'
+>>>>>>> restore-firebase-commit
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -29,6 +34,11 @@ flutter_ios_podfile_setup
 target 'Runner' do
   use_frameworks!
 
+  pod 'Firebase/Analytics', :modular_headers => true # 追記
+  pod 'Firebase/Auth', :modular_headers => true # 追記
+  pod 'Firebase/Core', :modular_headers => true # 追記
+  pod 'Firebase/Firestore', :modular_headers => true # 追記
+
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
   target 'RunnerTests' do
     inherit! :search_paths
@@ -58,5 +68,14 @@ post_install do |installer|
       end
     end
     flutter_additional_ios_build_settings(target)
+    if target.name == 'BoringSSL-GRPC' # 追記
+      target.source_build_phase.files.each do |file| # 追記
+        if file.settings && file.settings['COMPILER_FLAGS'] # 追記
+          flags = file.settings['COMPILER_FLAGS'].split # 追記
+          flags.reject! { |flag| flag == '-GCC_WARN_INHIBIT_ALL_WARNINGS' } # 追記
+          file.settings['COMPILER_FLAGS'] = flags.join(' ') # 追記
+        end # 追記
+      end # 追記
+    end # 追記
   end
 end
