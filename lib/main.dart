@@ -51,14 +51,48 @@ void main() async {
   runApp(const CoupleSplitApp());
 }
 
-class CoupleSplitApp extends StatelessWidget {
+class CoupleSplitApp extends StatefulWidget {
   const CoupleSplitApp({super.key});
+
+  @override
+  State<CoupleSplitApp> createState() => _CoupleSplitAppState();
+}
+
+class _CoupleSplitAppState extends State<CoupleSplitApp> {
+  // 初期画面の準備が完了したかどうかのフラグ
+  bool _initialized = false;
+  // 起動時に開くグループのID
+  String? _defaultGroupId;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeApp();
+  }
+
+  // アプリ初期化処理
+  Future<void> _initializeApp() async {
+    // SharedPreferencesから起動時に開くグループIDを取得
+    final prefs = await SharedPreferences.getInstance();
+    final defaultGroupId = prefs.getString('default_group_id');
+
+    setState(() {
+      _defaultGroupId = defaultGroupId;
+      _initialized = true;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Couple Split App',
       theme: ThemeData(primarySwatch: Colors.pink),
-      home: const GroupSelectionPage(),
+      home:
+          _initialized
+              ? (_defaultGroupId != null
+                  ? HomePage(groupId: _defaultGroupId!)
+                  : const GroupSelectionPage())
+              : const SplashScreen(),
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,
@@ -66,6 +100,16 @@ class CoupleSplitApp extends StatelessWidget {
       ],
       supportedLocales: const [Locale('ja', '')],
     );
+  }
+}
+
+// スプラッシュスクリーン（アプリ起動時の読み込み画面）
+class SplashScreen extends StatelessWidget {
+  const SplashScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }
 
